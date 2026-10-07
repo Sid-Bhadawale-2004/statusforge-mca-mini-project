@@ -1,12 +1,12 @@
 # Claude Prompt: Prepare StatusForge Mini-Project Documentation as a Word Document
 
-Copy the prompt below into Claude Code. If Claude Code is working locally, open the StatusForge project folder. If using a GitHub-connected Claude session, replace `<GITHUB_REPOSITORY_URL>` with the repository URL after publishing the project and ask Claude to inspect that repository. Attach the institute certificate and any actual application screenshots if they are available.
+Copy the prompt below into Claude Code. If Claude Code is working locally, open the StatusForge project folder. If using a GitHub-connected Claude session, provide the repository URL and ask Claude to inspect the project. Attach the institute certificate and any actual application screenshots if they are available.
 
 ---
 
 You are preparing the formal project documentation for the **S.Y. MCA Semester III, ITP31 Mini Project (Research Project)** titled **StatusForge**.
 
-**Project repository:** `<GITHUB_REPOSITORY_URL>`
+**Project repository:** <https://github.com/Sid-Bhadawale-2004/statusforge-mca-mini-project>
 
 First inspect the complete project repository at the URL above (or the locally opened StatusForge repository), including the backend, frontend, database models, API routes, tests, seed data, and existing README. Use the accompanying project-guidelines image as the required outline. If the repository is private or inaccessible to you, stop and report that access is required; do not pretend to have inspected it.
 
