@@ -1,0 +1,6 @@
+{
+  "name": "StatusForge",
+  "description": "Multi-tenant Incident Management, On-Call Scheduling, Automated Escalation Engine, and Real-Time Status Communication Platform for engineering teams.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

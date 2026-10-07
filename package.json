@@ -1,0 +1,15 @@
+{
+  "name": "statusforge",
+  "private": true,
+  "version": "1.0.0",
+  "description": "StatusForge - Decoupled Incident Management and Real-time Status Communication Platform",
+  "scripts": {
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "seed": "npm --prefix backend run seed",
+    "build:backend": "npm --prefix backend run build",
+    "build:frontend": "npm --prefix frontend run build",
+    "build": "npm run build:backend && npm run build:frontend",
+    "install:all": "npm --prefix backend install && npm --prefix frontend install"
+  }
+}
