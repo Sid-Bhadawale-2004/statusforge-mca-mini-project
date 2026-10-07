@@ -19,7 +19,6 @@ statusforge/
 │   ├── package.json
 │   ├── tsconfig.json               # NodeNext / ES2022 TypeScript configuration
 │   ├── .env.example
-│   ├── .env                        # Local database & JWT credentials
 │   └── src/
 │       ├── config/
 │       │   └── db.ts               # Mongoose connection with lifecycle event logging
