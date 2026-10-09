@@ -164,17 +164,9 @@ Open your browser to:
 
 For genuine Google sign-in, create an OAuth 2.0 **Web application** client in the Google Cloud Console. Add the frontend origin (for local development, `http://localhost:3000`) to its authorized JavaScript origins. Set the resulting client ID as `GOOGLE_CLIENT_ID` in `backend/.env` and `VITE_GOOGLE_CLIENT_ID` in `frontend/.env`. Restart both development servers after editing these files. Google handles the account-selection and consent screens; StatusForge verifies the returned token with Google before signing in.
 
-For hosted deployments, the backend can use the Gmail API over HTTPS, which avoids Render's blocked SMTP connection:
+For Gmail SMTP, enable 2-Step Verification on the sending Google account and create a Google App Password. In Render → backend service → **Environment**, set `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=465`, `SMTP_SECURE=true`, `SMTP_USER` to the Gmail address, and `SMTP_PASS` to its 16-character App Password. Gmail's alternative is port `587` with `SMTP_SECURE=false`. SMTP is the preferred provider whenever valid SMTP settings are present; remove any `GMAIL_API_*` or `RESEND_API_KEY` values if you do not want those providers configured. Never commit the App Password.
 
-1. In the Google Cloud project, enable **Gmail API** and configure the OAuth consent screen for an app you control.
-2. Create or use an OAuth **Web application** client. If using OAuth Playground to obtain the token, add `https://developers.google.com/oauthplayground` as an authorized redirect URI.
-3. Open [Google OAuth Playground](https://developers.google.com/oauthplayground), select its settings gear, enable **Use your own OAuth credentials**, and enter that OAuth client's ID and secret.
-4. Authorize `https://www.googleapis.com/auth/gmail.send` while signed in as the Gmail account that should send StatusForge mail. Exchange the authorization code for tokens and copy the refresh token.
-5. In Render → backend service → **Environment**, set `GMAIL_API_CLIENT_ID`, `GMAIL_API_CLIENT_SECRET`, `GMAIL_API_REFRESH_TOKEN`, and `GMAIL_API_SENDER`. Set the sender to the authorized Gmail account, for example `StatusForge <youraccount@gmail.com>`, then redeploy.
-
-Keep the client secret and refresh token private and out of Git/chat. Gmail API credentials take priority over Resend and SMTP. If the OAuth consent app is left in **Testing**, Google may expire refresh tokens after seven days; for ongoing delivery, configure the consent screen appropriately for production and complete any Google verification it requires.
-
-Alternatively, use the Resend HTTPS email API: verify a domain you own in Resend, create an API key, and set `RESEND_API_KEY` and `EMAIL_FROM` on the backend. Use a sender address on that verified domain, for example `StatusForge <alerts@your-domain.com>`. Resend is selected when Gmail API credentials are not fully configured. Gmail SMTP remains available as a local-development fallback, but the deployed Render service cannot connect to Gmail SMTP on port 587. The app sends account sign-in notices, team invitations and access confirmations, on-call rotation assignment notices, escalation-policy assignment notices, password-reset links, password-change notices, and incident alerts. Invitation links expire after 48 hours; password-reset links expire after one hour.
+Render previously returned a connection timeout when this service connected to Gmail on port 587. Trying Gmail's SSL port 465 is an alternative, but if Render also times out on port 465, the service's network or plan is blocking SMTP and application code cannot make that connection succeed. The email features send account sign-in notices, team invitations and access confirmations, on-call rotation assignment notices, escalation-policy assignment notices, password-reset links, password-change notices, and incident alerts. Invitation links expire after 48 hours; password-reset links expire after one hour.
 
 ---
 

@@ -56,14 +56,14 @@ class NotificationService {
         refreshToken: GMAIL_API_REFRESH_TOKEN,
         sender: GMAIL_API_SENDER,
       };
-      console.log('[NotificationService] Gmail API email delivery configured.');
+      console.log('[NotificationService] Gmail API fallback configured.');
     } else if (GMAIL_API_CLIENT_ID || GMAIL_API_CLIENT_SECRET || GMAIL_API_REFRESH_TOKEN || GMAIL_API_SENDER) {
       console.warn('[NotificationService] Gmail API settings are incomplete; all four GMAIL_API_* settings are required.');
     }
 
     if (process.env.RESEND_API_KEY) {
       this.resendApiKey = process.env.RESEND_API_KEY;
-      if (!this.gmailApiConfig) console.log('[NotificationService] Resend email API configured.');
+      console.log('[NotificationService] Resend API fallback configured.');
     }
 
     if (
@@ -80,9 +80,7 @@ class NotificationService {
         user: SMTP_USER,
         pass: SMTP_PASS,
       };
-      if (!this.gmailApiConfig && !this.resendApiKey) {
-        console.log('[NotificationService] Email (SMTP) transport initialized.');
-      }
+      console.log('[NotificationService] Gmail SMTP primary transport configured.');
     } else if (!this.gmailApiConfig && !this.resendApiKey) {
       console.warn(
         '[NotificationService] Email not configured — set Gmail API credentials, RESEND_API_KEY and EMAIL_FROM, or SMTP settings.'
@@ -96,6 +94,10 @@ class NotificationService {
     html: string;
     text: string;
   }): Promise<boolean> {
+    if (this.smtpConfig) {
+      return this.sendSmtpEmail(opts);
+    }
+
     if (this.gmailApiConfig) {
       try {
         const accessToken = await this.getGmailAccessToken();
@@ -189,16 +191,27 @@ class NotificationService {
       }
     }
 
-    if (!this.smtpConfig) {
-      console.warn(
-        `[NotificationService] Email not sent to ${opts.to}: Resend and SMTP are not configured.`
-      );
+    console.warn(
+      `[NotificationService] Email not sent to ${opts.to}: SMTP, Gmail API, and Resend are not configured.`
+    );
+    return false;
+  }
+
+  private async sendSmtpEmail(opts: {
+    to: string;
+    subject: string;
+    html: string;
+    text: string;
+  }): Promise<boolean> {
+    const smtpConfig = this.smtpConfig;
+    if (!smtpConfig) {
+      console.error('[NotificationService] SMTP delivery requested without SMTP configuration.');
       return false;
     }
 
     let mailer: Transporter | null = null;
     try {
-      const smtpHost = this.smtpConfig.host;
+      const smtpHost = smtpConfig.host;
       const ipAddress = isIP(smtpHost) ? smtpHost : (await resolve4(smtpHost))[0];
       if (!ipAddress) {
         throw new Error(`SMTP host ${smtpHost} did not resolve to an IPv4 address.`);
@@ -206,9 +219,9 @@ class NotificationService {
 
       mailer = nodemailer.createTransport({
         host: ipAddress,
-        port: this.smtpConfig.port,
-        secure: this.smtpConfig.secure,
-        auth: { user: this.smtpConfig.user, pass: this.smtpConfig.pass },
+        port: smtpConfig.port,
+        secure: smtpConfig.secure,
+        auth: { user: smtpConfig.user, pass: smtpConfig.pass },
         ...(isIP(smtpHost) ? {} : { tls: { servername: smtpHost } }),
         connectionTimeout: 8_000,
         greetingTimeout: 8_000,
@@ -216,10 +229,7 @@ class NotificationService {
         dnsTimeout: 5_000,
       });
       const info = await mailer.sendMail({
-        from:
-          process.env.EMAIL_FROM && !process.env.EMAIL_FROM.includes('your_gmail')
-            ? process.env.EMAIL_FROM
-            : this.smtpConfig.user || '"StatusForge Alerts" <alerts@statusforge.io>',
+        from: `"StatusForge Alerts" <${smtpConfig.user}>`,
         to: opts.to,
         subject: opts.subject,
         text: opts.text,
