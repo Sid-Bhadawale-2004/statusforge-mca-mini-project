@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useGoogleLogin } from '@react-oauth/google';
+import { GoogleLogin } from '@react-oauth/google';
 import {
   Radio,
   Lock,
@@ -16,10 +18,15 @@ import { useAuth } from '../context/AuthContext.js';
 import { api } from '../services/api.js';
 
 export const AuthPage: React.FC = () => {
-  const { login, signup, loginWithGoogle } = useAuth();
+  const { login, signup, loginWithGoogle, acceptInvitation } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const invitationToken = searchParams.get('inviteToken') || '';
+  const initialResetToken = searchParams.get('resetToken') || '';
 
-  const [tab, setTab] = useState<'login' | 'signup' | 'forgot'>('login');
+  const [tab, setTab] = useState<'login' | 'signup' | 'forgot' | 'invite'>(() =>
+    invitationToken ? 'invite' : initialResetToken ? 'forgot' : 'login'
+  );
   const [error, setError] = useState<string>('');
   const [successMsg, setSuccessMsg] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
@@ -37,14 +44,10 @@ export const AuthPage: React.FC = () => {
 
   // Forgot password form
   const [forgotEmail, setForgotEmail] = useState<string>('');
-  const [resetToken, setResetToken] = useState<string>('');
+  const [resetToken] = useState<string>(initialResetToken);
   const [newPassword, setNewPassword] = useState<string>('');
-  const [forgotStep, setForgotStep] = useState<1 | 2>(1);
-
-  // Google Sign-In Modal / Prompt
-  const [googlePromptOpen, setGooglePromptOpen] = useState<boolean>(false);
-  const [googleEmailInput, setGoogleEmailInput] = useState<string>('');
-  const [googleNameInput, setGoogleNameInput] = useState<string>('');
+  const [invitePassword, setInvitePassword] = useState('');
+  const [confirmInvitePassword, setConfirmInvitePassword] = useState('');
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -88,10 +91,6 @@ export const AuthPage: React.FC = () => {
     try {
       const res = await api.auth.forgotPassword(forgotEmail);
       setSuccessMsg(res.message);
-      if (res.resetToken) {
-        setResetToken(res.resetToken);
-        setForgotStep(2);
-      }
     } catch (err: any) {
       setError(err.message || 'Failed to request password reset.');
     } finally {
@@ -107,13 +106,8 @@ export const AuthPage: React.FC = () => {
     try {
       const res = await api.auth.resetPassword({ token: resetToken, newPassword });
       setSuccessMsg(res.message);
-      setTimeout(() => {
-        setTab('login');
-        setLoginEmail(forgotEmail);
-        setLoginPassword(newPassword);
-        setForgotStep(1);
-        setSuccessMsg('Password updated! You can now log in.');
-      }, 1500);
+      setTab('login');
+      setSearchParams({}, { replace: true });
     } catch (err: any) {
       setError(err.message || 'Failed to reset password.');
     } finally {
@@ -121,24 +115,47 @@ export const AuthPage: React.FC = () => {
     }
   };
 
-  const handleGoogleSignInClick = () => {
-    setGooglePromptOpen(true);
-  };
-
-  const handleConfirmGoogleSignIn = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!googleEmailInput.trim()) return;
+  const handleGoogleCredential = async (accessToken: string) => {
     setError('');
     setLoading(true);
     try {
-      await loginWithGoogle({
-        email: googleEmailInput.trim(),
-        name: googleNameInput.trim() || googleEmailInput.split('@')[0],
-      });
-      setGooglePromptOpen(false);
+      await loginWithGoogle(accessToken);
       navigate('/');
     } catch (err: any) {
       setError(err.message || 'Google authentication failed.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const startGoogleSignIn = useGoogleLogin({
+    scope: 'openid email profile',
+    onSuccess: (response) => void handleGoogleCredential(response.access_token),
+    onError: () => setError('Google sign-in was cancelled or could not be completed.'),
+  });
+
+  const handleGoogleSignInClick = () => {
+    if (!import.meta.env.VITE_GOOGLE_CLIENT_ID) {
+      setError('Google sign-in is not configured. Add VITE_GOOGLE_CLIENT_ID to frontend/.env and GOOGLE_CLIENT_ID to backend/.env.');
+      return;
+    }
+    startGoogleSignIn();
+  };
+
+  const handleAcceptInvitation = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (invitePassword !== confirmInvitePassword) {
+      setError('The passwords do not match.');
+      return;
+    }
+    setError('');
+    setLoading(true);
+    try {
+      await acceptInvitation(invitationToken, invitePassword);
+      setSearchParams({}, { replace: true });
+      navigate('/');
+    } catch (err: any) {
+      setError(err.message || 'Could not accept this invitation.');
     } finally {
       setLoading(false);
     }
@@ -170,7 +187,7 @@ export const AuthPage: React.FC = () => {
         {/* Auth Box */}
         <div className="bg-[#0E1526] border border-[#1C2842] rounded-3xl p-6 sm:p-8 space-y-6 shadow-2xl">
           {/* Tabs */}
-          {tab !== 'forgot' ? (
+          {tab === 'login' || tab === 'signup' ? (
             <div className="flex bg-[#0A0F1D] p-1 rounded-2xl border border-[#1A253A] text-xs font-semibold">
               <button
                 type="button"
@@ -178,6 +195,7 @@ export const AuthPage: React.FC = () => {
                   setTab('login');
                   setError('');
                   setSuccessMsg('');
+                  setSearchParams({}, { replace: true });
                 }}
                 className={`flex-1 py-2 rounded-xl transition ${
                   tab === 'login' ? 'bg-[#18233C] text-white shadow' : 'text-slate-400 hover:text-white'
@@ -213,7 +231,9 @@ export const AuthPage: React.FC = () => {
                 <ArrowLeft className="w-3.5 h-3.5" />
                 <span>Back to Sign In</span>
               </button>
-              <span className="text-xs font-bold text-white font-['Outfit']">Password Recovery</span>
+              <span className="text-xs font-bold text-white font-['Outfit']">
+                {tab === 'invite' ? 'Accept Team Invitation' : 'Password Recovery'}
+              </span>
             </div>
           )}
 
@@ -233,7 +253,7 @@ export const AuthPage: React.FC = () => {
           )}
 
           {/* Google Sign In Button */}
-          {tab !== 'forgot' && (
+          {tab !== 'forgot' && tab !== 'invite' && (
             <div className="space-y-4">
               <button
                 type="button"
@@ -437,13 +457,52 @@ export const AuthPage: React.FC = () => {
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
             </form>
+          ) : tab === 'invite' ? (
+            <form onSubmit={handleAcceptInvitation} className="space-y-4">
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Set a password to accept your team invitation and access StatusForge.
+              </p>
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                  Password (min 8 characters)
+                </label>
+                <input
+                  type="password"
+                  required
+                  minLength={8}
+                  value={invitePassword}
+                  onChange={(event) => setInvitePassword(event.target.value)}
+                  className="w-full bg-[#131C30] border border-[#202E4C] rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-rose-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                  Confirm Password
+                </label>
+                <input
+                  type="password"
+                  required
+                  minLength={8}
+                  value={confirmInvitePassword}
+                  onChange={(event) => setConfirmInvitePassword(event.target.value)}
+                  className="w-full bg-[#131C30] border border-[#202E4C] rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-rose-500"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={loading || !invitationToken}
+                className="w-full py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold disabled:opacity-50"
+              >
+                {loading ? 'Accepting Invitation...' : 'Accept Invitation'}
+              </button>
+            </form>
           ) : (
             /* Forgot Password Flow */
             <div className="space-y-4">
-              {forgotStep === 1 ? (
+              {!resetToken ? (
                 <form onSubmit={handleForgotPasswordSubmit} className="space-y-4">
                   <p className="text-xs text-slate-300 leading-relaxed">
-                    Enter the email associated with your account. We will issue a secure verification reset token.
+                    Enter the email associated with your account. We will email you a secure password reset link.
                   </p>
 
                   <div>
@@ -468,28 +527,14 @@ export const AuthPage: React.FC = () => {
                     disabled={loading || !forgotEmail}
                     className="w-full py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-950/40 flex items-center justify-center space-x-2 transition disabled:opacity-50 cursor-pointer"
                   >
-                    <span>{loading ? 'Verifying...' : 'Request Reset Token'}</span>
+                    <span>{loading ? 'Sending...' : 'Email Reset Link'}</span>
                     <KeyRound className="w-3.5 h-3.5" />
                   </button>
                 </form>
               ) : (
                 <form onSubmit={handleResetPasswordSubmit} className="space-y-4">
                   <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs">
-                    Reset token generated for <span className="font-semibold">{forgotEmail}</span>. Enter your new password below.
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">
-                      Reset Verification Token
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={resetToken}
-                      onChange={(e) => setResetToken(e.target.value)}
-                      placeholder="Paste reset token..."
-                      className="w-full bg-[#131C30] border border-[#202E4C] rounded-xl px-3 py-2 text-xs text-emerald-400 font-mono focus:outline-none focus:border-rose-500"
-                    />
+                    Choose a new password for your StatusForge account.
                   </div>
 
                   <div>
@@ -509,10 +554,10 @@ export const AuthPage: React.FC = () => {
 
                   <button
                     type="submit"
-                    disabled={loading || !resetToken || !newPassword}
+                    disabled={loading || !newPassword}
                     className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-lg shadow-emerald-950/40 flex items-center justify-center space-x-2 transition disabled:opacity-50 cursor-pointer"
                   >
-                    <span>{loading ? 'Updating Password...' : 'Save New Password & Sign In'}</span>
+                    <span>{loading ? 'Updating Password...' : 'Save New Password'}</span>
                     <CheckCircle2 className="w-3.5 h-3.5" />
                   </button>
                 </form>
@@ -523,85 +568,6 @@ export const AuthPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Google Sign-In Modal */}
-      {googlePromptOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
-          <div className="bg-[#0D1424] border border-[#1E293B] rounded-2xl w-full max-w-sm p-6 space-y-4 shadow-2xl">
-            <div className="text-center space-y-1.5">
-              <div className="w-10 h-10 rounded-2xl bg-white flex items-center justify-center mx-auto shadow-md">
-                <svg className="w-5 h-5" viewBox="0 0 24 24">
-                  <path
-                    fill="#4285F4"
-                    d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                  />
-                  <path
-                    fill="#34A853"
-                    d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                  />
-                  <path
-                    fill="#FBBC05"
-                    d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                  />
-                  <path
-                    fill="#EA4335"
-                    d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                  />
-                </svg>
-              </div>
-              <h3 className="text-sm font-bold text-white font-['Outfit']">Sign in with Google</h3>
-              <p className="text-[11px] text-slate-400">
-                Authenticate with your Google account credentials
-              </p>
-            </div>
-
-            <form onSubmit={handleConfirmGoogleSignIn} className="space-y-3">
-              <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
-                  Google Email
-                </label>
-                <input
-                  type="email"
-                  required
-                  placeholder="your.name@gmail.com"
-                  value={googleEmailInput}
-                  onChange={(e) => setGoogleEmailInput(e.target.value)}
-                  className="w-full bg-[#141C2E] border border-[#26354D] rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-rose-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
-                  Your Full Name
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. Maya Chen"
-                  value={googleNameInput}
-                  onChange={(e) => setGoogleNameInput(e.target.value)}
-                  className="w-full bg-[#141C2E] border border-[#26354D] rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-rose-500"
-                />
-              </div>
-
-              <div className="flex items-center space-x-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setGooglePromptOpen(false)}
-                  className="flex-1 py-2 rounded-xl text-xs text-slate-400 hover:text-white bg-[#141C2E] border border-[#26354D]"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={loading || !googleEmailInput}
-                  className="flex-1 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-500 shadow-md transition cursor-pointer"
-                >
-                  {loading ? 'Connecting...' : 'Authorize'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

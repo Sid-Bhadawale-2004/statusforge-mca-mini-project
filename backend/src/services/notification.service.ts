@@ -1,6 +1,18 @@
 import 'dotenv/config';
 import nodemailer, { Transporter } from 'nodemailer';
 
+const escapeHtml = (value: string): string =>
+  value.replace(/[&<>"']/g, (character) => {
+    const entities: Record<string, string> = {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    };
+    return entities[character];
+  });
+
 /**
  * NotificationService
  * Sends email via Nodemailer (SMTP/Gmail).
@@ -66,6 +78,69 @@ class NotificationService {
       console.error(`[NotificationService] Email failed for ${opts.to}:`, err);
       return false;
     }
+  }
+
+  async sendSignInNotice(opts: {
+    to: string;
+    name: string;
+    provider: 'password' | 'Google';
+  }): Promise<boolean> {
+    const name = escapeHtml(opts.name);
+    const provider = escapeHtml(opts.provider);
+    const time = new Date().toUTCString();
+    const text = `Hello ${opts.name},\n\nYour StatusForge account was signed in using ${opts.provider} at ${time}.\n\nIf this wasn't you, reset your password and contact your organization administrator.\n\nStatusForge Security`;
+    return this.sendEmail({
+      to: opts.to,
+      subject: 'New sign-in to your StatusForge account',
+      text,
+      html: `<p>Hello ${name},</p><p>Your StatusForge account was signed in using <strong>${provider}</strong> at ${escapeHtml(time)}.</p><p>If this wasn't you, reset your password and contact your organization administrator.</p><p>StatusForge Security</p>`,
+    });
+  }
+
+  async sendTeamInvitation(opts: {
+    to: string;
+    name: string;
+    inviterName: string;
+    organizationName: string;
+    role: string;
+    inviteUrl: string;
+  }): Promise<boolean> {
+    const name = escapeHtml(opts.name);
+    const inviter = escapeHtml(opts.inviterName);
+    const organization = escapeHtml(opts.organizationName);
+    const role = escapeHtml(opts.role);
+    const inviteUrl = escapeHtml(opts.inviteUrl);
+    const text = `Hello ${opts.name},\n\n${opts.inviterName} invited you to join ${opts.organizationName} on StatusForge as a ${opts.role}.\n\nAccept the invitation and set your password within 48 hours:\n${opts.inviteUrl}\n\nIf you weren't expecting this invitation, you can ignore this email.\n\nStatusForge`;
+    return this.sendEmail({
+      to: opts.to,
+      subject: `Invitation to join ${opts.organizationName} on StatusForge`,
+      text,
+      html: `<p>Hello ${name},</p><p><strong>${inviter}</strong> invited you to join <strong>${organization}</strong> on StatusForge as a <strong>${role}</strong>.</p><p><a href="${inviteUrl}">Accept invitation and set your password</a></p><p>This invitation expires in 48 hours. If you weren't expecting it, you can ignore this email.</p><p>StatusForge</p>`,
+    });
+  }
+
+  async sendPasswordReset(opts: { to: string; name: string; resetUrl: string }): Promise<boolean> {
+    const name = escapeHtml(opts.name);
+    const resetUrl = escapeHtml(opts.resetUrl);
+    const text = `Hello ${opts.name},\n\nWe received a request to reset your StatusForge password. Use this link within one hour:\n${opts.resetUrl}\n\nIf you did not request a reset, ignore this email. Your password will not change unless the link is used.\n\nStatusForge Security`;
+    return this.sendEmail({
+      to: opts.to,
+      subject: 'Reset your StatusForge password',
+      text,
+      html: `<p>Hello ${name},</p><p>We received a request to reset your StatusForge password.</p><p><a href="${resetUrl}">Reset your password</a></p><p>This link expires in one hour. If you did not request a reset, ignore this email.</p><p>StatusForge Security</p>`,
+    });
+  }
+
+  async sendPasswordChangedNotice(opts: { to: string; name: string }): Promise<boolean> {
+    const name = escapeHtml(opts.name);
+    const time = escapeHtml(new Date().toUTCString());
+    const text = `Hello ${opts.name},\n\nYour StatusForge password was changed at ${new Date().toUTCString()}.\n\nIf you did not make this change, contact your organization administrator immediately.\n\nStatusForge Security`;
+    return this.sendEmail({
+      to: opts.to,
+      subject: 'Your StatusForge password was changed',
+      text,
+      html: `<p>Hello ${name},</p><p>Your StatusForge password was changed at ${time}.</p><p>If you did not make this change, contact your organization administrator immediately.</p><p>StatusForge Security</p>`,
+    });
   }
 
   /**

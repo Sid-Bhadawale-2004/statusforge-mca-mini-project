@@ -2,6 +2,8 @@ import dotenv from 'dotenv';
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Organization } from '../models/Organization.js';
 import { User } from '../models/User.js';
 import { Service } from '../models/Service.js';
@@ -12,7 +14,8 @@ import { IncidentEvent } from '../models/IncidentEvent.js';
 import { Notification } from '../models/Notification.js';
 import { AuditLog } from '../models/AuditLog.js';
 
-dotenv.config();
+const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: path.resolve(scriptDirectory, '../../.env') });
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/statusforge';
 
@@ -26,8 +29,8 @@ async function seed() {
     throw new Error('Set SEED_DEFAULT_PASSWORD to a unique password of at least 12 characters in backend/.env before seeding.');
   }
 
-  console.log(`[StatusForge Seed] Connecting to MongoDB: ${MONGODB_URI}...`);
-  await mongoose.connect(MONGODB_URI);
+  console.log('[StatusForge Seed] Connecting to the configured MongoDB database...');
+  await mongoose.connect(MONGODB_URI, { serverSelectionTimeoutMS: 10000 });
   console.log('[StatusForge Seed] Connected to MongoDB.');
 
   const orgSlug = 'acme-engineering';
@@ -443,7 +446,7 @@ async function seed() {
   console.log('\n=============================================================');
   console.log('STATUSFORGE MONGODB SEEDING COMPLETED SUCCESSFULLY!');
   console.log('=============================================================');
-  console.log(`Database URI:      ${MONGODB_URI}`);
+  console.log('Database:          configured MongoDB instance');
   console.log(`Organization Name: ${organization.name}`);
   console.log(`Organization Slug: ${organization.slug}`);
   console.log(`Public Status URL: http://localhost:3000/status/${organization.slug}`);
@@ -459,10 +462,26 @@ async function seed() {
   console.log('  - Real-time Notification Worker (Operational)');
   console.log('=============================================================\n');
 
-  await mongoose.disconnect();
 }
 
-seed().catch((err) => {
-  console.error('[StatusForge Seed] Failed:', err);
-  process.exit(1);
-});
+async function runSeed(): Promise<void> {
+  let failed = false;
+
+  try {
+    await seed();
+  } catch (error) {
+    failed = true;
+    console.error('[StatusForge Seed] Failed:', error);
+  }
+
+  try {
+    await mongoose.disconnect();
+  } catch (error) {
+    failed = true;
+    console.error('[StatusForge Seed] Failed to close the MongoDB connection:', error);
+  }
+
+  if (failed) process.exitCode = 1;
+}
+
+void runSeed();

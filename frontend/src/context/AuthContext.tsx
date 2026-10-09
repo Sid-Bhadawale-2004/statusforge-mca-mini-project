@@ -12,7 +12,8 @@ interface AuthContextType {
   socket: Socket | null;
   login: (email: string, password: string) => Promise<void>;
   signup: (payload: any) => Promise<void>;
-  loginWithGoogle: (payload: any) => Promise<void>;
+  loginWithGoogle: (credential: string) => Promise<void>;
+  acceptInvitation: (token: string, password: string) => Promise<void>;
   logout: () => void;
   switchDemoRole: (role: UserRole) => Promise<void>;
   switchDemoUser: (userId: string) => Promise<void>;
@@ -113,10 +114,23 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
-  const loginWithGoogle = async (googlePayload: any) => {
+  const loginWithGoogle = async (accessToken: string) => {
     setIsLoading(true);
     try {
-      const data = await api.auth.googleAuth(googlePayload);
+      const data = await api.auth.googleAuth({ accessToken });
+      localStorage.setItem('statusforge_token', data.token);
+      setToken(data.token);
+      setUser(data.user);
+      setOrganization(data.organization);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const acceptInvitation = async (invitationToken: string, password: string) => {
+    setIsLoading(true);
+    try {
+      const data = await api.auth.acceptInvitation({ token: invitationToken, password });
       localStorage.setItem('statusforge_token', data.token);
       setToken(data.token);
       setUser(data.user);
@@ -179,6 +193,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         login,
         signup,
         loginWithGoogle,
+        acceptInvitation,
         logout,
         switchDemoRole,
         switchDemoUser,

@@ -118,13 +118,20 @@ npm install
 # 2. Copy backend/.env.example to backend/.env, then replace the JWT_SECRET
 #    and SEED_DEFAULT_PASSWORD placeholders with your own unique values.
 #    Keep backend/.env private; it is excluded from Git.
+#    Configure Gmail SMTP and GOOGLE_CLIENT_ID as described below.
 
 # 3. Seed MongoDB with Acme Engineering demo data
+#    Run this from the repository root:
+cd ..
 npm run seed
+#    Or run `npm run seed` from the backend directory.
 
 # 4. Start the backend server
+cd backend
 npm run dev
 ```
+
+The seed command reads `backend/.env` directly and requires `SEED_DEFAULT_PASSWORD` to be set to a unique password of at least 12 characters. Re-running it deletes and recreates the `acme-engineering` seed organization and its data.
 
 The backend starts listening on `http://localhost:5000` and initializes:
 - Direct Mongoose connection to `statusforge` database
@@ -143,12 +150,21 @@ cd frontend
 # 1. Install frontend dependencies
 npm install
 
-# 2. Launch Vite dev server
+# 2. Copy frontend/.env.example to frontend/.env and set VITE_GOOGLE_CLIENT_ID
+#    to the same Google OAuth Web client ID used by the backend.
+
+# 3. Launch Vite dev server
 npm run dev
 ```
 
 Open your browser to:
 👉 **`http://localhost:3000`**
+
+### Email and Google sign-in configuration
+
+For genuine Google sign-in, create an OAuth 2.0 **Web application** client in the Google Cloud Console. Add the frontend origin (for local development, `http://localhost:3000`) to its authorized JavaScript origins. Set the resulting client ID as `GOOGLE_CLIENT_ID` in `backend/.env` and `VITE_GOOGLE_CLIENT_ID` in `frontend/.env`. Restart both development servers after editing these files. Google handles the account-selection and consent screens; StatusForge verifies the returned token with Google before signing in.
+
+For outgoing email through Gmail, enable 2-Step Verification on the sending Google account, create an App Password, and set `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=587`, `SMTP_SECURE=false`, `SMTP_USER`, `SMTP_PASS`, and `EMAIL_FROM` in `backend/.env`. Use the App Password for `SMTP_PASS`, not the account's normal password. The backend sends account sign-in notices, team invitations, password-reset links, and password-change notices through this SMTP account. Invitation links expire after 48 hours; password-reset links expire after one hour.
 
 ---
 

@@ -1,10 +1,12 @@
 import { Router, Request, Response } from 'express';
-import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import { z } from 'zod';
 import { User } from '../models/User.js';
+import { Organization } from '../models/Organization.js';
 import { AuditLog } from '../models/AuditLog.js';
 import { authenticateToken } from '../middleware/auth.js';
 import { requireRole } from '../middleware/rbac.js';
+import { notificationService } from '../services/notification.service.js';
 
 export const userRouter = Router();
 
@@ -16,7 +18,6 @@ const createUserSchema = z.object({
   role: z.enum(['admin', 'responder', 'viewer']),
   phone: z.string().optional(),
   title: z.string().optional(),
-  password: z.string().min(6).optional().default('StatusForge123!'),
 });
 
 const updateUserSchema = z.object({
@@ -54,18 +55,48 @@ userRouter.post('/', requireRole('admin'), async (req: Request, res: Response): 
     return;
   }
 
-  const salt = await bcrypt.genSalt(10);
-  const passwordHash = await bcrypt.hash(validated.password, salt);
+  const invitationToken = crypto.randomBytes(32).toString('hex');
+  const organization = await Organization.findById(req.organizationId);
+  if (!organization) {
+    res.status(404).json({
+      success: false,
+      error: { code: 'ORGANIZATION_NOT_FOUND', message: 'Organization not found.' },
+    });
+    return;
+  }
 
   const newUser = await User.create({
     organizationId: req.organizationId,
     name: validated.name.trim(),
     email: validated.email.toLowerCase().trim(),
-    passwordHash,
     role: validated.role,
     phone: validated.phone?.trim() || '',
     title: validated.title?.trim() || '',
+    invitationTokenHash: crypto.createHash('sha256').update(invitationToken).digest('hex'),
+    invitationExpiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000),
   });
+
+  const inviteUrl = `${process.env.CLIENT_URL || 'http://localhost:3000'}/auth?inviteToken=${encodeURIComponent(invitationToken)}`;
+  const invitationSent = await notificationService.sendTeamInvitation({
+    to: newUser.email,
+    name: newUser.name,
+    inviterName: req.user!.name,
+    organizationName: organization.name,
+    role: newUser.role,
+    inviteUrl,
+  });
+
+  if (!invitationSent) {
+    await User.deleteOne({ _id: newUser._id, organizationId: req.organizationId });
+    res.status(503).json({
+      success: false,
+      error: {
+        code: 'INVITATION_EMAIL_FAILED',
+        message: 'The invitation email could not be sent. Check SMTP configuration and try again.',
+      },
+    });
+    return;
+  }
 
   // Log to AuditLog
   await AuditLog.create({

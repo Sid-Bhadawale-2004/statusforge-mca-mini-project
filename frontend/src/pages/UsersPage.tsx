@@ -32,9 +32,9 @@ export const UsersPage: React.FC = () => {
   const [role, setRole] = useState<UserRole>('responder');
   const [phone, setPhone] = useState('');
   const [title, setTitle] = useState('');
-  const [password, setPassword] = useState('StatusForge123!');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const [inviteNotice, setInviteNotice] = useState('');
 
   const loadData = useCallback(async () => {
     try {
@@ -91,9 +91,9 @@ export const UsersPage: React.FC = () => {
         role,
         phone: phone.trim(),
         title: title.trim(),
-        password,
       });
       setModalOpen(false);
+      setInviteNotice(`Invitation email sent to ${email.trim()}.`);
       setName('');
       setEmail('');
       setPhone('');
@@ -144,6 +144,13 @@ export const UsersPage: React.FC = () => {
           )}
         </div>
       </div>
+
+      {inviteNotice && (
+        <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2">
+          <CheckCircle2 className="w-4 h-4 shrink-0" />
+          <span>{inviteNotice}</span>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex items-center space-x-2 border-b border-[#1E293B] pb-1">
@@ -392,19 +399,6 @@ export const UsersPage: React.FC = () => {
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">
-                  Initial Password
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="w-full bg-[#141C2E] border border-[#26354D] rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-rose-500"
-                />
-              </div>
-
               <div className="flex items-center justify-end space-x-3 pt-3 border-t border-[#1E293B]">
                 <button
                   type="button"
@@ -418,7 +412,7 @@ export const UsersPage: React.FC = () => {
                   disabled={isSubmitting}
                   className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold shadow-lg shadow-rose-950/40"
                 >
-                  {isSubmitting ? 'Saving...' : 'Add Team Member'}
+                  {isSubmitting ? 'Sending Invitation...' : 'Send Invitation'}
                 </button>
               </div>
             </form>

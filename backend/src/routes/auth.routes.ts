@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
+import { OAuth2Client } from 'google-auth-library';
 import { z } from 'zod';
 import { Organization } from '../models/Organization.js';
 import { User } from '../models/User.js';
@@ -9,8 +10,10 @@ import { Service } from '../models/Service.js';
 import { OnCallSchedule } from '../models/OnCallSchedule.js';
 import { EscalationPolicy } from '../models/EscalationPolicy.js';
 import { authenticateToken } from '../middleware/auth.js';
+import { notificationService } from '../services/notification.service.js';
 
 export const authRouter = Router();
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 const signupSchema = z.object({
   orgName: z.string().min(2, 'Organization name must be at least 2 characters'),
@@ -46,6 +49,17 @@ function generateToken(user: any): string {
     secret,
     { expiresIn: '7d' }
   );
+}
+
+function notifySuccessfulSignIn(user: { email: string; name: string }, provider: 'password' | 'Google'): void {
+  void notificationService
+    .sendSignInNotice({ to: user.email, name: user.name, provider })
+    .then((sent) => {
+      if (!sent) console.error(`[StatusForge Auth] Sign-in email notification could not be sent to ${user.email}.`);
+    })
+    .catch((error) => {
+      console.error(`[StatusForge Auth] Sign-in email notification failed for ${user.email}:`, error);
+    });
 }
 
 // POST /api/v1/auth/signup
@@ -156,6 +170,8 @@ authRouter.post('/signup', async (req: Request, res: Response): Promise<void> =>
     createdAt: adminUser.createdAt,
   };
 
+  notifySuccessfulSignIn(adminUser, 'password');
+
   res.status(201).json({
     success: true,
     data: {
@@ -218,6 +234,7 @@ authRouter.post('/login', async (req: Request, res: Response): Promise<void> => 
   }
 
   const token = generateToken(user);
+  notifySuccessfulSignIn(user, 'password');
 
   const userSafe = {
     _id: user._id,
@@ -235,6 +252,77 @@ authRouter.post('/login', async (req: Request, res: Response): Promise<void> => 
     data: {
       token,
       user: userSafe,
+      organization,
+    },
+  });
+});
+
+// POST /api/v1/auth/accept-invitation
+authRouter.post('/accept-invitation', async (req: Request, res: Response): Promise<void> => {
+  const parsed = z.object({
+    token: z.string().min(1),
+    password: z.string().min(8, 'Password must be at least 8 characters'),
+  }).safeParse(req.body);
+
+  if (!parsed.success) {
+    res.status(400).json({
+      success: false,
+      error: { code: 'INVALID_INPUT', message: 'A valid invitation token and password of at least 8 characters are required.' },
+    });
+    return;
+  }
+
+  const tokenHash = crypto.createHash('sha256').update(parsed.data.token).digest('hex');
+  const user = await User.findOne({
+    invitationTokenHash: tokenHash,
+    invitationExpiresAt: { $gt: new Date() },
+  }).select('+invitationTokenHash +invitationExpiresAt');
+
+  if (!user) {
+    res.status(400).json({
+      success: false,
+      error: { code: 'INVITATION_INVALID_OR_EXPIRED', message: 'This invitation is invalid or has expired. Ask your administrator to send a new invitation.' },
+    });
+    return;
+  }
+
+  const organization = await Organization.findById(user.organizationId);
+  if (!organization) {
+    res.status(404).json({
+      success: false,
+      error: { code: 'ORGANIZATION_NOT_FOUND', message: 'The invited organization no longer exists.' },
+    });
+    return;
+  }
+
+  user.passwordHash = await bcrypt.hash(parsed.data.password, await bcrypt.genSalt(10));
+  user.invitationTokenHash = undefined;
+  user.invitationExpiresAt = undefined;
+  await user.save();
+
+  const passwordChangedEmailSent = await notificationService.sendPasswordChangedNotice({
+    to: user.email,
+    name: user.name,
+  });
+  if (!passwordChangedEmailSent) {
+    console.error(`[StatusForge Auth] Invitation password confirmation email could not be sent to ${user.email}.`);
+  }
+
+  const token = generateToken(user);
+  notifySuccessfulSignIn(user, 'password');
+  res.json({
+    success: true,
+    data: {
+      token,
+      user: {
+        _id: user._id,
+        organizationId: user.organizationId,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        phone: user.phone,
+        title: user.title,
+      },
       organization,
     },
   });
@@ -325,23 +413,25 @@ authRouter.post('/forgot-password', async (req: Request, res: Response): Promise
   }
 
   const user = await User.findOne({ email: email.toLowerCase().trim() });
-  let resetToken = null;
-
   if (user) {
-    resetToken = crypto.randomBytes(20).toString('hex');
-    user.resetPasswordToken = resetToken;
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    user.resetPasswordToken = crypto.createHash('sha256').update(resetToken).digest('hex');
     user.resetPasswordExpires = new Date(Date.now() + 3600000); // 1 hour validity
     await user.save();
-    console.log(`[StatusForge Auth] Password reset token generated for ${user.email}: ${resetToken}`);
+    const resetUrl = `${process.env.CLIENT_URL || 'http://localhost:3000'}/auth?resetToken=${encodeURIComponent(resetToken)}`;
+    const emailSent = await notificationService.sendPasswordReset({
+      to: user.email,
+      name: user.name,
+      resetUrl,
+    });
+    if (!emailSent) {
+      console.error(`[StatusForge Auth] Password reset email could not be sent to ${user.email}.`);
+    }
   }
 
-  // Returns instructions and test resetToken for immediate usability
   res.json({
     success: true,
-    message: user
-      ? 'Password reset instructions have been generated.'
-      : 'If that email is registered, password reset instructions have been generated.',
-    resetToken,
+    message: 'If that email is registered, password reset instructions have been sent.',
   });
 });
 
@@ -357,7 +447,7 @@ authRouter.post('/reset-password', async (req: Request, res: Response): Promise<
   }
 
   const user = await User.findOne({
-    resetPasswordToken: token,
+    resetPasswordToken: crypto.createHash('sha256').update(token).digest('hex'),
     resetPasswordExpires: { $gt: new Date() },
   });
 
@@ -378,6 +468,14 @@ authRouter.post('/reset-password', async (req: Request, res: Response): Promise<
   user.resetPasswordExpires = undefined;
   await user.save();
 
+  const notificationSent = await notificationService.sendPasswordChangedNotice({
+    to: user.email,
+    name: user.name,
+  });
+  if (!notificationSent) {
+    console.error(`[StatusForge Auth] Password-change email could not be sent to ${user.email}.`);
+  }
+
   res.json({
     success: true,
     message: 'Your password has been successfully reset. You may now sign in.',
@@ -386,61 +484,92 @@ authRouter.post('/reset-password', async (req: Request, res: Response): Promise<
 
 // POST /api/v1/auth/google
 authRouter.post('/google', async (req: Request, res: Response): Promise<void> => {
-  let email = '';
-  let name = '';
-  let googleId = '';
-  let avatarUrl = '';
-
-  const { credential, email: directEmail, name: directName } = req.body;
-
-  if (credential && typeof credential === 'string') {
-    try {
-      // Decode JWT token payload from Google Identity Services
-      const parts = credential.split('.');
-      if (parts.length === 3) {
-        const payloadJson = Buffer.from(parts[1], 'base64url').toString('utf8');
-        const googlePayload = JSON.parse(payloadJson);
-        email = googlePayload.email;
-        name = googlePayload.name || googlePayload.given_name || email.split('@')[0];
-        googleId = googlePayload.sub;
-        avatarUrl = googlePayload.picture || '';
-      }
-    } catch (e) {
-      console.warn('[StatusForge Auth] Failed to parse Google credential token, falling back to body fields:', e);
-    }
+  const accessToken = req.body?.accessToken;
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  if (!clientId) {
+    res.status(503).json({
+      success: false,
+      error: { code: 'GOOGLE_SIGN_IN_NOT_CONFIGURED', message: 'Google sign-in is not configured on this server.' },
+    });
+    return;
   }
-
-  if (!email && directEmail) {
-    email = directEmail;
-    name = directName || email.split('@')[0];
-    googleId = req.body.googleId || `g_${Date.now()}`;
-    avatarUrl = req.body.picture || '';
-  }
-
-  if (!email) {
+  if (typeof accessToken !== 'string' || accessToken.length === 0) {
     res.status(400).json({
       success: false,
-      error: { code: 'GOOGLE_AUTH_FAILED', message: 'Could not extract verified email from Google sign-in.' },
+      error: { code: 'GOOGLE_AUTH_FAILED', message: 'A Google access token is required.' },
     });
     return;
   }
 
-  email = email.toLowerCase().trim();
+  let googlePayload: {
+    email?: string;
+    email_verified?: boolean;
+    sub?: string;
+    name?: string;
+    given_name?: string;
+    picture?: string;
+  };
+  try {
+    const tokenInfo = await googleClient.getTokenInfo(accessToken);
+    if (tokenInfo.aud !== clientId) {
+      res.status(401).json({
+        success: false,
+        error: { code: 'GOOGLE_AUTH_FAILED', message: 'This Google token was issued for a different application.' },
+      });
+      return;
+    }
+
+    const profileResponse = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!profileResponse.ok) {
+      throw new Error(`Google userinfo request failed with status ${profileResponse.status}`);
+    }
+    googlePayload = await profileResponse.json() as typeof googlePayload;
+  } catch (error) {
+    console.error('[StatusForge Auth] Google access-token verification failed:', error);
+    res.status(401).json({
+      success: false,
+      error: { code: 'GOOGLE_AUTH_FAILED', message: 'Google could not verify this sign-in. Please try again.' },
+    });
+    return;
+  }
+
+  if (!googlePayload?.email || !googlePayload.email_verified || !googlePayload.sub) {
+    res.status(401).json({
+      success: false,
+      error: { code: 'GOOGLE_EMAIL_UNVERIFIED', message: 'Use a Google account with a verified email address.' },
+    });
+    return;
+  }
+
+  const email = googlePayload.email.toLowerCase().trim();
+  const name = googlePayload.name || googlePayload.given_name || email.split('@')[0];
+  const googleId = googlePayload.sub;
+  const avatarUrl = googlePayload.picture || '';
 
   // Check if user already exists
   let user = await User.findOne({ email });
   let organization: any = null;
 
   if (user) {
-    // Existing user
-    if (googleId && !user.googleId) user.googleId = googleId;
-    if (avatarUrl && !user.avatarUrl) user.avatarUrl = avatarUrl;
+    if (user.googleId && user.googleId !== googleId) {
+      res.status(401).json({
+        success: false,
+        error: { code: 'GOOGLE_ACCOUNT_MISMATCH', message: 'This account is linked to a different Google identity.' },
+      });
+      return;
+    }
+    user.googleId = googleId;
+    if (avatarUrl) user.avatarUrl = avatarUrl;
+    user.invitationTokenHash = undefined;
+    user.invitationExpiresAt = undefined;
     await user.save();
     organization = await Organization.findById(user.organizationId);
   } else {
     // New user signing in with Google -> automatically create organization and admin user
     const slugBase = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '') || 'team';
-    const slug = `${slugBase}-${Math.floor(100 + Math.random() * 900)}`;
+    const slug = `${slugBase}-${crypto.randomBytes(3).toString('hex')}`;
 
     organization = await Organization.create({
       name: `${name}'s Team`,
@@ -502,6 +631,7 @@ authRouter.post('/google', async (req: Request, res: Response): Promise<void> =>
   }
 
   const token = generateToken(user);
+  notifySuccessfulSignIn(user, 'Google');
   const userSafe = {
     _id: user._id,
     organizationId: user.organizationId,
