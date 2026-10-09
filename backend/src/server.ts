@@ -92,14 +92,15 @@ async function startServer() {
     // 1. Connect to MongoDB
     await connectDB();
 
-    // Normalize existing escalation policies before the email-only schema is used.
-    const policies = await EscalationPolicy.find({ 'steps.channel': { $ne: 'email' } });
-    for (const policy of policies) {
-      for (const step of policy.steps) step.channel = 'email';
-      await policy.save();
-    }
-    if (policies.length > 0) {
-      console.log(`[StatusForge Backend] Updated ${policies.length} escalation policy/policies to email notifications.`);
+    // Update only legacy channel fields; loading and saving whole policies can fail
+    // validation when older documents contain unrelated legacy fields.
+    const policyMigration = await EscalationPolicy.collection.updateMany(
+      { steps: { $elemMatch: { channel: { $ne: 'email' } } } },
+      { $set: { 'steps.$[step].channel': 'email' } },
+      { arrayFilters: [{ 'step.channel': { $ne: 'email' } }] }
+    );
+    if (policyMigration.modifiedCount > 0) {
+      console.log(`[StatusForge Backend] Updated ${policyMigration.modifiedCount} escalation policy/policies to email notifications.`);
     }
 
     // 2. Start background escalation worker
