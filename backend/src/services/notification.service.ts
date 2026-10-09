@@ -20,6 +20,7 @@ const escapeHtml = (value: string): string =>
  * Sends email via Nodemailer (SMTP/Gmail).
  */
 class NotificationService {
+  private resendApiKey: string | null = null;
   private smtpConfig: {
     host: string;
     port: number;
@@ -36,6 +37,12 @@ class NotificationService {
 
   private initMailer(): void {
     const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS } = process.env;
+    if (process.env.RESEND_API_KEY) {
+      this.resendApiKey = process.env.RESEND_API_KEY;
+      console.log('[NotificationService] Resend email API configured.');
+      return;
+    }
+
     if (
       SMTP_HOST &&
       SMTP_USER &&
@@ -53,7 +60,7 @@ class NotificationService {
       console.log('[NotificationService] Email (SMTP) transport initialized.');
     } else {
       console.warn(
-        '[NotificationService] Email SMTP not configured — set SMTP_HOST, SMTP_USER, SMTP_PASS in .env to enable real emails.'
+        '[NotificationService] Email not configured — set RESEND_API_KEY and EMAIL_FROM, or configure SMTP_HOST, SMTP_USER, and SMTP_PASS.'
       );
     }
   }
@@ -64,9 +71,50 @@ class NotificationService {
     html: string;
     text: string;
   }): Promise<boolean> {
+    if (this.resendApiKey) {
+      const from = process.env.EMAIL_FROM;
+      if (!from) {
+        console.error('[NotificationService] Email not sent: EMAIL_FROM is required when using Resend.');
+        return false;
+      }
+
+      try {
+        const response = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${this.resendApiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            from,
+            to: [opts.to],
+            subject: opts.subject,
+            html: opts.html,
+            text: opts.text,
+          }),
+          signal: AbortSignal.timeout(15_000),
+        });
+
+        if (!response.ok) {
+          const details = await response.json().catch(() => null) as { message?: string } | null;
+          console.error(
+            `[NotificationService] Resend rejected email to ${opts.to} (HTTP ${response.status}): ${details?.message || response.statusText}`
+          );
+          return false;
+        }
+
+        const result = await response.json().catch(() => null) as { id?: string } | null;
+        console.log(`[NotificationService] Email accepted by Resend → ${opts.to}${result?.id ? ` | ID: ${result.id}` : ''}`);
+        return true;
+      } catch (err) {
+        console.error(`[NotificationService] Resend request failed for ${opts.to}:`, err);
+        return false;
+      }
+    }
+
     if (!this.smtpConfig) {
       console.warn(
-        `[NotificationService] Email not sent to ${opts.to}: SMTP is not configured.`
+        `[NotificationService] Email not sent to ${opts.to}: Resend and SMTP are not configured.`
       );
       return false;
     }
