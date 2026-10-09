@@ -59,7 +59,7 @@ export const api = {
       request<any>('/auth/reset-password', { method: 'POST', body: JSON.stringify(payload) }),
     acceptInvitation: (payload: { token: string; password: string }) =>
       request<any>('/auth/accept-invitation', { method: 'POST', body: JSON.stringify(payload) }),
-    googleAuth: (payload: any) =>
+    googleAuth: (payload: { credential: string }) =>
       request<any>('/auth/google', { method: 'POST', body: JSON.stringify(payload) }),
   },
 

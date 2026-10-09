@@ -114,10 +114,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
-  const loginWithGoogle = async (accessToken: string) => {
+  const loginWithGoogle = async (credential: string) => {
     setIsLoading(true);
     try {
-      const data = await api.auth.googleAuth({ accessToken });
+      const data = await api.auth.googleAuth({ credential });
       localStorage.setItem('statusforge_token', data.token);
       setToken(data.token);
       setUser(data.user);

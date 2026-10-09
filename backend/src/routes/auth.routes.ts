@@ -484,7 +484,7 @@ authRouter.post('/reset-password', async (req: Request, res: Response): Promise<
 
 // POST /api/v1/auth/google
 authRouter.post('/google', async (req: Request, res: Response): Promise<void> => {
-  const accessToken = req.body?.accessToken;
+  const credential = req.body?.credential;
   const clientId = process.env.GOOGLE_CLIENT_ID;
   if (!clientId) {
     res.status(503).json({
@@ -493,41 +493,20 @@ authRouter.post('/google', async (req: Request, res: Response): Promise<void> =>
     });
     return;
   }
-  if (typeof accessToken !== 'string' || accessToken.length === 0) {
+  if (typeof credential !== 'string' || credential.length === 0) {
     res.status(400).json({
       success: false,
-      error: { code: 'GOOGLE_AUTH_FAILED', message: 'A Google access token is required.' },
+      error: { code: 'GOOGLE_AUTH_FAILED', message: 'A Google identity credential is required.' },
     });
     return;
   }
 
-  let googlePayload: {
-    email?: string;
-    email_verified?: boolean;
-    sub?: string;
-    name?: string;
-    given_name?: string;
-    picture?: string;
-  };
+  let googlePayload;
   try {
-    const tokenInfo = await googleClient.getTokenInfo(accessToken);
-    if (tokenInfo.aud !== clientId) {
-      res.status(401).json({
-        success: false,
-        error: { code: 'GOOGLE_AUTH_FAILED', message: 'This Google token was issued for a different application.' },
-      });
-      return;
-    }
-
-    const profileResponse = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    if (!profileResponse.ok) {
-      throw new Error(`Google userinfo request failed with status ${profileResponse.status}`);
-    }
-    googlePayload = await profileResponse.json() as typeof googlePayload;
+    const ticket = await googleClient.verifyIdToken({ idToken: credential, audience: clientId });
+    googlePayload = ticket.getPayload();
   } catch (error) {
-    console.error('[StatusForge Auth] Google access-token verification failed:', error);
+    console.error('[StatusForge Auth] Google identity-token verification failed:', error);
     res.status(401).json({
       success: false,
       error: { code: 'GOOGLE_AUTH_FAILED', message: 'Google could not verify this sign-in. Please try again.' },
