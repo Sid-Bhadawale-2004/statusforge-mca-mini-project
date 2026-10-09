@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { setDefaultResultOrder } from 'node:dns';
 import nodemailer, { Transporter } from 'nodemailer';
 
 const escapeHtml = (value: string): string =>
@@ -35,11 +36,17 @@ class NotificationService {
       !SMTP_USER.includes('your_gmail') &&
       !SMTP_PASS.includes('your_gmail')
     ) {
+      // Hosted Node environments may not have a usable IPv6 route.
+      setDefaultResultOrder('ipv4first');
       this.mailer = nodemailer.createTransport({
         host: SMTP_HOST,
         port: Number(SMTP_PORT) || 587,
         secure: process.env.SMTP_SECURE === 'true',
         auth: { user: SMTP_USER, pass: SMTP_PASS },
+        connectionTimeout: 8_000,
+        greetingTimeout: 8_000,
+        socketTimeout: 12_000,
+        dnsTimeout: 5_000,
       });
       console.log('[NotificationService] Email (SMTP) transport initialized.');
     } else {

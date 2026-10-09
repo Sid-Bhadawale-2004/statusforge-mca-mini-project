@@ -119,28 +119,34 @@ incidentRouter.post('/', requireRole('admin', 'responder'), async (req: Request,
     timestamp: new Date(),
   });
 
-  // ── Send email to the assigned on-call user (Step 1 alert) ───────────────
+  // Dispatch email after the incident is persisted; SMTP must not delay triggering.
   const assignedUser = onCallUser ?? req.user!;
-  const delivered = await notificationService.dispatchAlert({
-    userEmail: assignedUser.email,
-    userName: assignedUser.name,
-    incidentNumber,
-    incidentTitle: incident.title,
-    incidentSeverity: incident.severity,
-    escalationStep: 1,
-    serviceName: service.name,
-  });
-
-  const notif = await Notification.create({
-    organizationId: req.organizationId,
-    incidentId: incident._id,
-    userId: assignedUserId,
-    channel: 'email',
-    status: delivered ? 'sent' : 'failed',
-    subject: `[ALERT Step 1] ${incident.severity} Incident #${incidentNumber}: ${incident.title}`,
-    message: `A new incident has been triggered on ${service.name}. Title: ${incident.title}. Description: ${incident.description}`,
-    sentAt: new Date(),
-  });
+  void (async () => {
+    try {
+      const delivered = await notificationService.dispatchAlert({
+        userEmail: assignedUser.email,
+        userName: assignedUser.name,
+        incidentNumber,
+        incidentTitle: incident.title,
+        incidentSeverity: incident.severity,
+        escalationStep: 1,
+        serviceName: service.name,
+      });
+      const notif = await Notification.create({
+        organizationId: req.organizationId,
+        incidentId: incident._id,
+        userId: assignedUserId,
+        channel: 'email',
+        status: delivered ? 'sent' : 'failed',
+        subject: `[ALERT Step 1] ${incident.severity} Incident #${incidentNumber}: ${incident.title}`,
+        message: `A new incident has been triggered on ${service.name}. Title: ${incident.title}. Description: ${incident.description}`,
+        sentAt: new Date(),
+      });
+      realtimeService.emitNotificationSent(req.organizationId!.toString(), notif);
+    } catch (error) {
+      console.error(`[Incident] Alert email processing failed for incident #${incidentNumber}:`, error);
+    }
+  })();
 
   await AuditLog.create({
     organizationId: req.organizationId,
@@ -161,7 +167,6 @@ incidentRouter.post('/', requireRole('admin', 'responder'), async (req: Request,
 
   const org = await Organization.findById(req.organizationId);
   realtimeService.emitIncidentCreated(req.organizationId!.toString(), populated);
-  realtimeService.emitNotificationSent(req.organizationId!.toString(), notif);
   realtimeService.emitServiceUpdated(req.organizationId!.toString(), service, org?.slug);
 
   res.status(201).json({
@@ -416,35 +421,41 @@ incidentRouter.post('/:id/escalate', requireRole('admin', 'responder'), async (r
     timestamp: new Date(),
   });
 
-  const delivered = nextUser
-    ? await notificationService.dispatchAlert({
-        userEmail: nextUser.email,
-        userName: nextUser.name,
-        incidentNumber: incident.incidentNumber,
-        incidentTitle: incident.title,
-        incidentSeverity: incident.severity,
-        escalationStep: nextStep.order,
-        serviceName: (await Service.findById(incident.serviceId))?.name ?? 'Unknown Service',
-      })
-    : false;
-
-  const notif = await Notification.create({
-    organizationId: req.organizationId,
-    incidentId: incident._id,
-    userId: nextStep.notifyUserId,
-    channel: 'email',
-    status: delivered ? 'sent' : 'failed',
-    subject: `[MANUAL ESCALATION Step ${nextStep.order}] ${incident.severity} Incident #${incident.incidentNumber}`,
-    message: `Incident #${incident.incidentNumber} was manually escalated to you by ${req.user!.name}.`,
-    sentAt: new Date(),
-  });
+  if (nextUser) {
+    void (async () => {
+      try {
+        const service = await Service.findById(incident.serviceId);
+        const delivered = await notificationService.dispatchAlert({
+          userEmail: nextUser.email,
+          userName: nextUser.name,
+          incidentNumber: incident.incidentNumber,
+          incidentTitle: incident.title,
+          incidentSeverity: incident.severity,
+          escalationStep: nextStep.order,
+          serviceName: service?.name ?? 'Unknown Service',
+        });
+        const notif = await Notification.create({
+          organizationId: req.organizationId,
+          incidentId: incident._id,
+          userId: nextStep.notifyUserId,
+          channel: 'email',
+          status: delivered ? 'sent' : 'failed',
+          subject: `[MANUAL ESCALATION Step ${nextStep.order}] ${incident.severity} Incident #${incident.incidentNumber}`,
+          message: `Incident #${incident.incidentNumber} was manually escalated to you by ${req.user!.name}.`,
+          sentAt: new Date(),
+        });
+        realtimeService.emitNotificationSent(req.organizationId!.toString(), notif);
+      } catch (error) {
+        console.error(`[Incident] Manual escalation email failed for incident #${incident.incidentNumber}:`, error);
+      }
+    })();
+  }
 
   const populated = await Incident.findById(incident._id)
     .populate('serviceId', 'name currentStatus')
     .populate('assignedUserId', 'name email role phone');
 
   realtimeService.emitIncidentUpdated(req.organizationId!.toString(), populated);
-  realtimeService.emitNotificationSent(req.organizationId!.toString(), notif);
 
   res.json({
     success: true,

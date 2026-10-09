@@ -218,29 +218,34 @@ webhookRouter.post('/services/:serviceId', async (req: Request, res: Response): 
     timestamp: new Date(),
   });
 
-  // ── Send email to on-call responder (Step 1 webhook alert) ───────────────
-  let notificationRecord = null;
+  // Dispatch email after the incident is persisted; SMTP must not delay webhook acknowledgment.
   if (onCallUser) {
-    const delivered = await notificationService.dispatchAlert({
-      userEmail: onCallUser.email,
-      userName: onCallUser.name,
-      incidentNumber,
-      incidentTitle: incident.title,
-      incidentSeverity: severity,
-      escalationStep: 1,
-      serviceName: service.name,
-    });
-
-    notificationRecord = await Notification.create({
-      organizationId: service.organizationId,
-      incidentId: incident._id,
-      userId: onCallUser._id,
-      channel: 'email',
-      status: delivered ? 'sent' : 'failed',
-      subject: `[WEBHOOK ALERT Step 1] ${severity} Incident #${incidentNumber}: ${incident.title}`,
-      message: `Monitoring webhook triggered incident #${incidentNumber} on service '${service.name}'. You are the active on-call responder.`,
-      sentAt: new Date(),
-    });
+    void (async () => {
+      try {
+        const delivered = await notificationService.dispatchAlert({
+          userEmail: onCallUser.email,
+          userName: onCallUser.name,
+          incidentNumber,
+          incidentTitle: incident.title,
+          incidentSeverity: severity,
+          escalationStep: 1,
+          serviceName: service.name,
+        });
+        const notificationRecord = await Notification.create({
+          organizationId: service.organizationId,
+          incidentId: incident._id,
+          userId: onCallUser._id,
+          channel: 'email',
+          status: delivered ? 'sent' : 'failed',
+          subject: `[WEBHOOK ALERT Step 1] ${severity} Incident #${incidentNumber}: ${incident.title}`,
+          message: `Monitoring webhook triggered incident #${incidentNumber} on service '${service.name}'. You are the active on-call responder.`,
+          sentAt: new Date(),
+        });
+        realtimeService.emitNotificationSent(service.organizationId.toString(), notificationRecord);
+      } catch (error) {
+        console.error(`[Webhook] Alert email processing failed for incident #${incidentNumber}:`, error);
+      }
+    })();
   }
 
   const populated = await Incident.findById(incident._id)
@@ -249,9 +254,6 @@ webhookRouter.post('/services/:serviceId', async (req: Request, res: Response): 
 
   const org = await Organization.findById(service.organizationId);
   realtimeService.emitIncidentCreated(service.organizationId.toString(), populated);
-  if (notificationRecord) {
-    realtimeService.emitNotificationSent(service.organizationId.toString(), notificationRecord);
-  }
   realtimeService.emitServiceUpdated(service.organizationId.toString(), service, org?.slug);
 
   res.status(201).json({
