@@ -86,7 +86,7 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
     await switchDemoRole(role);
   };
 
-  const publicUrl = organization?.slug ? `/status/${organization.slug}` : '/status/acme-engineering';
+  const publicUrl = organization?.slug ? `/status/${organization.slug}` : '/status';
 
   return (
     <div className="min-h-screen bg-[#090D16] text-[#E2E8F0] flex flex-col font-sans">

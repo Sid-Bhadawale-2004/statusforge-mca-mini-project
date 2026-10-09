@@ -13,17 +13,26 @@ import {
   ChevronDown,
 } from 'lucide-react';
 import { api } from '../services/api.js';
+import { API_ORIGIN } from '../services/api.js';
+import { useAuth } from '../context/AuthContext.js';
 import { PublicStatusResponse, ServiceStatus } from '../types/index.js';
 
 export const PublicStatusPage: React.FC = () => {
   const { slug } = useParams<{ slug: string }>();
-  const activeSlug = slug || 'acme-engineering';
+  const { organization: contextOrganization, isAuthenticated, isLoading: authLoading } = useAuth();
+  const activeSlug = slug || (isAuthenticated ? contextOrganization?.slug : '') || '';
 
   const [data, setData] = useState<PublicStatusResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
   const loadStatus = useCallback(async () => {
+    if (!activeSlug) {
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
     try {
       const res = await api.public.getStatus(activeSlug);
       setData(res);
@@ -41,7 +50,9 @@ export const PublicStatusPage: React.FC = () => {
 
   // Connect to live public status socket room
   useEffect(() => {
-    const socket = io(window.location.origin, {
+    if (!activeSlug) return;
+
+    const socket = io(API_ORIGIN || window.location.origin, {
       path: '/socket.io',
       transports: ['websocket', 'polling'],
     });
@@ -64,7 +75,7 @@ export const PublicStatusPage: React.FC = () => {
     };
   }, [activeSlug, loadStatus]);
 
-  if (loading) {
+  if (loading || (!slug && authLoading)) {
     return (
       <div className="min-h-screen bg-[#070B14] flex items-center justify-center text-slate-400 text-xs">
         <RefreshCw className="w-5 h-5 animate-spin mr-2 text-rose-500" />
@@ -77,9 +88,13 @@ export const PublicStatusPage: React.FC = () => {
     return (
       <div className="min-h-screen bg-[#070B14] flex flex-col items-center justify-center p-6 text-center">
         <ShieldAlert className="w-12 h-12 text-rose-500 mb-3" />
-        <h2 className="text-xl font-bold text-white font-['Outfit']">Status Page Not Found</h2>
+        <h2 className="text-xl font-bold text-white font-['Outfit']">
+          {activeSlug ? 'Status Page Not Found' : 'Organization Status Link Required'}
+        </h2>
         <p className="text-xs text-slate-400 mt-1 max-w-sm">
-          No organization found matching slug '{activeSlug}'. Please check the URL or contact system administration.
+          {activeSlug
+            ? `No organization found matching slug '${activeSlug}'. Please check the URL or contact system administration.`
+            : 'A public status page needs an organization-specific URL. Ask an organization member to share their Public Status link.'}
         </p>
         <Link
           to="/"

@@ -140,7 +140,7 @@ export const api = {
   // Public status
   public: {
     getStatus: async (slug: string) => {
-      const res = await fetch(`/api/v1/public/status/${slug}`);
+      const res = await fetch(`${API_BASE}/public/status/${encodeURIComponent(slug)}`);
       const data = await res.json();
       if (!res.ok) {
         throw new ApiError(data.error?.message || 'Failed to fetch status page', 'NOT_FOUND', res.status);
