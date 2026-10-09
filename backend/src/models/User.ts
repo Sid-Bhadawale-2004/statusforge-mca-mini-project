@@ -62,8 +62,8 @@ const userSchema = new Schema<IUser>(
     },
     googleId: {
       type: String,
-      default: null,
-      index: true,
+      default: undefined,
+      index: { unique: true, sparse: true },
     },
     avatarUrl: {
       type: String,
