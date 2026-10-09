@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { User, Organization, UserRole } from '../types/index.js';
-import { api } from '../services/api.js';
+import { API_ORIGIN, api } from '../services/api.js';
 
 interface AuthContextType {
   user: User | null;
@@ -31,7 +31,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   // Initialize Socket.IO connection
   useEffect(() => {
-    const socketInstance = io(window.location.origin, {
+    const socketInstance = io(API_ORIGIN || window.location.origin, {
       path: '/socket.io',
       transports: ['websocket', 'polling'],
       reconnectionAttempts: 5,

@@ -14,11 +14,15 @@ const app = express();
 const httpServer = http.createServer(app);
 const PORT = Number(process.env.PORT) || 5000;
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
+const allowedClientOrigins = new Set([
+  CLIENT_URL,
+  ...(process.env.NODE_ENV === 'production' ? [] : ['http://localhost:3000', 'http://127.0.0.1:3000']),
+]);
 
 // Setup Socket.IO
 const io = new SocketIOServer(httpServer, {
   cors: {
-    origin: [CLIENT_URL, 'http://localhost:3000', 'http://127.0.0.1:3000'],
+    origin: [...allowedClientOrigins],
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
     credentials: true,
   },
@@ -30,12 +34,7 @@ realtimeService.init(io);
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps, curl, postman) or matching client url
-      if (!origin || origin.includes('localhost') || origin.includes('127.0.0.1') || origin === CLIENT_URL) {
-        callback(null, true);
-      } else {
-        callback(null, true); // Permissive in development
-      }
+      callback(null, !origin || allowedClientOrigins.has(origin));
     },
     credentials: true,
   })

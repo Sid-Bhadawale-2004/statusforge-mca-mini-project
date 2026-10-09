@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { X, Send, Terminal, CheckCircle2, AlertTriangle, ShieldAlert, Sparkles, Copy, Check } from 'lucide-react';
 import { ServiceItem } from '../types/index.js';
-import { api } from '../services/api.js';
+import { API_BASE, API_ORIGIN, api } from '../services/api.js';
 
 interface WebhookSimulatorModalProps {
   isOpen: boolean;
@@ -78,7 +78,8 @@ export const WebhookSimulatorModal: React.FC<WebhookSimulatorModalProps> = ({
         timestamp: new Date().toISOString(),
       };
 
-  const curlCommand = `curl -X POST "http://localhost:5000/api/v1/webhooks/services/${serviceId}" \\
+  const webhookUrl = `${API_ORIGIN || window.location.origin}${API_BASE}/webhooks/services/${serviceId}`;
+  const curlCommand = `curl -X POST "${webhookUrl}" \\
   -H "Content-Type: application/json" \\
   -H "X-Webhook-Secret: ${webhookSecret}" \\
   -d '${JSON.stringify(payloadObj, null, 2)}'`;

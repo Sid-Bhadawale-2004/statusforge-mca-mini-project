@@ -1,4 +1,6 @@
-const API_BASE = '/api/v1';
+const configuredApiOrigin = import.meta.env.VITE_API_URL?.replace(/\/+$/, '') || '';
+export const API_ORIGIN = configuredApiOrigin;
+export const API_BASE = configuredApiOrigin ? `${configuredApiOrigin}/api/v1` : '/api/v1';
 
 export class ApiError extends Error {
   code: string;
@@ -115,7 +117,7 @@ export const api = {
   // Webhook Simulator
   webhooks: {
     trigger: async (serviceId: string, secret: string, payload: any) => {
-      const res = await fetch(`/api/v1/webhooks/services/${serviceId}`, {
+      const res = await fetch(`${API_BASE}/webhooks/services/${serviceId}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
