@@ -92,7 +92,7 @@ userRouter.post('/', requireRole('admin'), async (req: Request, res: Response): 
       success: false,
       error: {
         code: 'INVITATION_EMAIL_FAILED',
-        message: 'The invitation email could not be sent. Check SMTP configuration and try again.',
+        message: 'The invitation email could not be delivered. Check the backend logs for the SMTP connection or authentication error, then try again.',
       },
     });
     return;

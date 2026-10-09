@@ -1,5 +1,6 @@
 import 'dotenv/config';
-import { setDefaultResultOrder } from 'node:dns';
+import { resolve4 } from 'node:dns/promises';
+import { isIP } from 'node:net';
 import nodemailer, { Transporter } from 'nodemailer';
 
 const escapeHtml = (value: string): string =>
@@ -19,7 +20,13 @@ const escapeHtml = (value: string): string =>
  * Sends email via Nodemailer (SMTP/Gmail).
  */
 class NotificationService {
-  private mailer: Transporter | null = null;
+  private smtpConfig: {
+    host: string;
+    port: number;
+    secure: boolean;
+    user: string;
+    pass: string;
+  } | null = null;
 
   constructor() {
     this.initMailer();
@@ -36,18 +43,13 @@ class NotificationService {
       !SMTP_USER.includes('your_gmail') &&
       !SMTP_PASS.includes('your_gmail')
     ) {
-      // Hosted Node environments may not have a usable IPv6 route.
-      setDefaultResultOrder('ipv4first');
-      this.mailer = nodemailer.createTransport({
+      this.smtpConfig = {
         host: SMTP_HOST,
         port: Number(SMTP_PORT) || 587,
         secure: process.env.SMTP_SECURE === 'true',
-        auth: { user: SMTP_USER, pass: SMTP_PASS },
-        connectionTimeout: 8_000,
-        greetingTimeout: 8_000,
-        socketTimeout: 12_000,
-        dnsTimeout: 5_000,
-      });
+        user: SMTP_USER,
+        pass: SMTP_PASS,
+      };
       console.log('[NotificationService] Email (SMTP) transport initialized.');
     } else {
       console.warn(
@@ -62,18 +64,37 @@ class NotificationService {
     html: string;
     text: string;
   }): Promise<boolean> {
-    if (!this.mailer) {
+    if (!this.smtpConfig) {
       console.warn(
         `[NotificationService] Email not sent to ${opts.to}: SMTP is not configured.`
       );
       return false;
     }
+
+    let mailer: Transporter | null = null;
     try {
-      const info = await this.mailer.sendMail({
+      const smtpHost = this.smtpConfig.host;
+      const ipAddress = isIP(smtpHost) ? smtpHost : (await resolve4(smtpHost))[0];
+      if (!ipAddress) {
+        throw new Error(`SMTP host ${smtpHost} did not resolve to an IPv4 address.`);
+      }
+
+      mailer = nodemailer.createTransport({
+        host: ipAddress,
+        port: this.smtpConfig.port,
+        secure: this.smtpConfig.secure,
+        auth: { user: this.smtpConfig.user, pass: this.smtpConfig.pass },
+        ...(isIP(smtpHost) ? {} : { tls: { servername: smtpHost } }),
+        connectionTimeout: 8_000,
+        greetingTimeout: 8_000,
+        socketTimeout: 12_000,
+        dnsTimeout: 5_000,
+      });
+      const info = await mailer.sendMail({
         from:
           process.env.EMAIL_FROM && !process.env.EMAIL_FROM.includes('your_gmail')
             ? process.env.EMAIL_FROM
-            : process.env.SMTP_USER || '"StatusForge Alerts" <alerts@statusforge.io>',
+            : this.smtpConfig.user || '"StatusForge Alerts" <alerts@statusforge.io>',
         to: opts.to,
         subject: opts.subject,
         text: opts.text,
@@ -84,6 +105,8 @@ class NotificationService {
     } catch (err) {
       console.error(`[NotificationService] Email failed for ${opts.to}:`, err);
       return false;
+    } finally {
+      mailer?.close();
     }
   }
 
