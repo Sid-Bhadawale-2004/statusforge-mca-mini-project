@@ -2,9 +2,11 @@ import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { EscalationPolicy } from '../models/EscalationPolicy.js';
 import { Service } from '../models/Service.js';
+import { User } from '../models/User.js';
 import { AuditLog } from '../models/AuditLog.js';
 import { authenticateToken } from '../middleware/auth.js';
 import { requireRole } from '../middleware/rbac.js';
+import { notificationService } from '../services/notification.service.js';
 
 export const policyRouter = Router();
 
@@ -85,6 +87,22 @@ policyRouter.post('/', requireRole('admin', 'responder'), async (req: Request, r
     return;
   }
 
+  const notifyUserIds = [...new Set(validated.steps.map((step) => step.notifyUserId))];
+  const assignedUsers = await User.find({
+    _id: { $in: notifyUserIds },
+    organizationId: req.organizationId,
+  }).select('name email');
+  if (assignedUsers.length !== notifyUserIds.length) {
+    res.status(400).json({
+      success: false,
+      error: {
+        code: 'INVALID_POLICY_ASSIGNEE',
+        message: 'Every escalation assignee must belong to this organization.',
+      },
+    });
+    return;
+  }
+
   const policy = await EscalationPolicy.create({
     organizationId: req.organizationId,
     serviceId: service._id,
@@ -105,6 +123,23 @@ policyRouter.post('/', requireRole('admin', 'responder'), async (req: Request, r
     metadata: { name: policy.name, serviceName: service.name },
     timestamp: new Date(),
   });
+
+  for (const user of assignedUsers) {
+    const assignedSteps = validated.steps.filter(
+      (step) => step.notifyUserId === user._id.toString()
+    );
+    void notificationService.sendEscalationPolicyAssignmentNotice({
+      to: user.email,
+      name: user.name,
+      policyName: policy.name,
+      serviceName: service.name,
+      steps: assignedSteps.map(({ order, timeoutMinutes }) => ({ order, timeoutMinutes })),
+    }).then((sent) => {
+      if (!sent) console.error(`[Policy] Assignment email could not be sent to ${user.email}.`);
+    }).catch((error) => {
+      console.error(`[Policy] Assignment email failed for ${user.email}:`, error);
+    });
+  }
 
   const populated = await EscalationPolicy.findById(policy._id)
     .populate('serviceId', 'name currentStatus')
@@ -132,6 +167,55 @@ policyRouter.put('/:id', requireRole('admin', 'responder'), async (req: Request,
     return;
   }
 
+  let newlyAssignedUsers: Array<{
+    name: string;
+    email: string;
+    steps: Array<{ order: number; timeoutMinutes: number }>;
+  }> = [];
+  if (validated.steps !== undefined) {
+    const validatedSteps = validated.steps;
+    const notifyUserIds = [...new Set(validatedSteps.map((step) => step.notifyUserId))];
+    const previousAssigneeIds = new Set(policy.steps.map((step) => step.notifyUserId.toString()));
+    const assignedUsers = await User.find({
+      _id: { $in: notifyUserIds },
+      organizationId: req.organizationId,
+    }).select('name email');
+    if (assignedUsers.length !== notifyUserIds.length) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'INVALID_POLICY_ASSIGNEE',
+          message: 'Every escalation assignee must belong to this organization.',
+        },
+      });
+      return;
+    }
+    newlyAssignedUsers = assignedUsers
+      .filter((user) => !previousAssigneeIds.has(user._id.toString()))
+      .map((user) => ({
+        name: user.name,
+        email: user.email,
+        steps: validatedSteps
+          .filter((step) => step.notifyUserId === user._id.toString())
+          .map(({ order, timeoutMinutes }) => ({ order, timeoutMinutes })),
+      }));
+  }
+
+  const service = await Service.findOne({
+    _id: policy.serviceId,
+    organizationId: req.organizationId,
+  });
+  if (!service) {
+    res.status(404).json({
+      success: false,
+      error: {
+        code: 'SERVICE_NOT_FOUND',
+        message: 'The service associated with this policy was not found.',
+      },
+    });
+    return;
+  }
+
   if (validated.name !== undefined) policy.name = validated.name.trim();
   if (validated.steps !== undefined) (policy.steps as any) = validated.steps;
   if (validated.repeatCount !== undefined) policy.repeatCount = validated.repeatCount;
@@ -150,6 +234,20 @@ policyRouter.put('/:id', requireRole('admin', 'responder'), async (req: Request,
     metadata: validated,
     timestamp: new Date(),
   });
+
+  for (const user of newlyAssignedUsers) {
+    void notificationService.sendEscalationPolicyAssignmentNotice({
+      to: user.email,
+      name: user.name,
+      policyName: policy.name,
+      serviceName: service.name,
+      steps: user.steps,
+    }).then((sent) => {
+      if (!sent) console.error(`[Policy] Assignment email could not be sent to ${user.email}.`);
+    }).catch((error) => {
+      console.error(`[Policy] Assignment email failed for ${user.email}:`, error);
+    });
+  }
 
   const populated = await EscalationPolicy.findById(policy._id)
     .populate('serviceId', 'name currentStatus')

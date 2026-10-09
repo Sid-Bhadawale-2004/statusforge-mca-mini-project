@@ -2,10 +2,12 @@ import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { OnCallSchedule } from '../models/OnCallSchedule.js';
 import { Service } from '../models/Service.js';
+import { User } from '../models/User.js';
 import { AuditLog } from '../models/AuditLog.js';
 import { authenticateToken } from '../middleware/auth.js';
 import { requireRole } from '../middleware/rbac.js';
 import { OnCallService } from '../services/oncall.service.js';
+import { notificationService } from '../services/notification.service.js';
 
 export const scheduleRouter = Router();
 
@@ -70,6 +72,7 @@ scheduleRouter.get('/', async (req: Request, res: Response): Promise<void> => {
 // POST /api/v1/schedules - Create schedule
 scheduleRouter.post('/', requireRole('admin', 'responder'), async (req: Request, res: Response): Promise<void> => {
   const validated = createScheduleSchema.parse(req.body);
+  const memberIds = [...new Set(validated.rotationMembers)];
 
   const service = await Service.findOne({ _id: validated.serviceId, organizationId: req.organizationId });
   if (!service) {
@@ -83,11 +86,26 @@ scheduleRouter.post('/', requireRole('admin', 'responder'), async (req: Request,
     return;
   }
 
+  const members = await User.find({
+    _id: { $in: memberIds },
+    organizationId: req.organizationId,
+  }).select('name email');
+  if (members.length !== memberIds.length) {
+    res.status(400).json({
+      success: false,
+      error: {
+        code: 'INVALID_ROTATION_MEMBER',
+        message: 'Every rotation member must belong to this organization.',
+      },
+    });
+    return;
+  }
+
   const schedule = await OnCallSchedule.create({
     organizationId: req.organizationId,
     serviceId: service._id,
     name: validated.name.trim(),
-    rotationMembers: validated.rotationMembers,
+    rotationMembers: members.map((member) => member._id),
     rotationType: validated.rotationType,
     startDate: validated.startDate ? new Date(validated.startDate) : new Date(),
     timezone: validated.timezone || 'UTC',
@@ -105,6 +123,21 @@ scheduleRouter.post('/', requireRole('admin', 'responder'), async (req: Request,
     metadata: { name: schedule.name, serviceName: service.name },
     timestamp: new Date(),
   });
+
+  for (const member of members) {
+    void notificationService.sendOnCallAssignmentNotice({
+      to: member.email,
+      name: member.name,
+      scheduleName: schedule.name,
+      serviceName: service.name,
+      rotationType: schedule.rotationType,
+      timezone: schedule.timezone,
+    }).then((sent) => {
+      if (!sent) console.error(`[Schedule] Assignment email could not be sent to ${member.email}.`);
+    }).catch((error) => {
+      console.error(`[Schedule] Assignment email failed for ${member.email}:`, error);
+    });
+  }
 
   const populated = await OnCallSchedule.findById(schedule._id)
     .populate('serviceId', 'name currentStatus')
@@ -132,8 +165,46 @@ scheduleRouter.put('/:id', requireRole('admin', 'responder'), async (req: Reques
     return;
   }
 
+  const service = await Service.findOne({
+    _id: schedule.serviceId,
+    organizationId: req.organizationId,
+  });
+  if (!service) {
+    res.status(404).json({
+      success: false,
+      error: {
+        code: 'SERVICE_NOT_FOUND',
+        message: 'The service associated with this schedule was not found.',
+      },
+    });
+    return;
+  }
+
+  let newlyAddedMembers: Array<{ name: string; email: string }> = [];
+  if (validated.rotationMembers !== undefined) {
+    const memberIds = [...new Set(validated.rotationMembers)];
+    const previousMemberIds = new Set(schedule.rotationMembers.map((memberId) => memberId.toString()));
+    const members = await User.find({
+      _id: { $in: memberIds },
+      organizationId: req.organizationId,
+    }).select('name email');
+    if (members.length !== memberIds.length) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'INVALID_ROTATION_MEMBER',
+          message: 'Every rotation member must belong to this organization.',
+        },
+      });
+      return;
+    }
+    newlyAddedMembers = members
+      .filter((member) => !previousMemberIds.has(member._id.toString()))
+      .map((member) => ({ name: member.name, email: member.email }));
+    schedule.rotationMembers = members.map((member) => member._id);
+  }
+
   if (validated.name !== undefined) schedule.name = validated.name.trim();
-  if (validated.rotationMembers !== undefined) (schedule.rotationMembers as any) = validated.rotationMembers;
   if (validated.rotationType !== undefined) schedule.rotationType = validated.rotationType;
   if (validated.startDate !== undefined) schedule.startDate = new Date(validated.startDate);
   if (validated.timezone !== undefined) schedule.timezone = validated.timezone;
@@ -152,6 +223,21 @@ scheduleRouter.put('/:id', requireRole('admin', 'responder'), async (req: Reques
     metadata: validated,
     timestamp: new Date(),
   });
+
+  for (const member of newlyAddedMembers) {
+    void notificationService.sendOnCallAssignmentNotice({
+      to: member.email,
+      name: member.name,
+      scheduleName: schedule.name,
+      serviceName: service.name,
+      rotationType: schedule.rotationType,
+      timezone: schedule.timezone,
+    }).then((sent) => {
+      if (!sent) console.error(`[Schedule] Assignment email could not be sent to ${member.email}.`);
+    }).catch((error) => {
+      console.error(`[Schedule] Assignment email failed for ${member.email}:`, error);
+    });
+  }
 
   const populated = await OnCallSchedule.findById(schedule._id)
     .populate('serviceId', 'name currentStatus')

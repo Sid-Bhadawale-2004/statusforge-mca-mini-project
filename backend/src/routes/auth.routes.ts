@@ -300,12 +300,13 @@ authRouter.post('/accept-invitation', async (req: Request, res: Response): Promi
   user.invitationExpiresAt = undefined;
   await user.save();
 
-  const passwordChangedEmailSent = await notificationService.sendPasswordChangedNotice({
+  const accessEmailSent = await notificationService.sendTeamAccessActivated({
     to: user.email,
     name: user.name,
+    organizationName: organization.name,
   });
-  if (!passwordChangedEmailSent) {
-    console.error(`[StatusForge Auth] Invitation password confirmation email could not be sent to ${user.email}.`);
+  if (!accessEmailSent) {
+    console.error(`[StatusForge Auth] Organization access confirmation email could not be sent to ${user.email}.`);
   }
 
   const token = generateToken(user);

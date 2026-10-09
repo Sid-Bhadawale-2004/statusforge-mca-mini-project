@@ -110,12 +110,75 @@ class NotificationService {
     const organization = escapeHtml(opts.organizationName);
     const role = escapeHtml(opts.role);
     const inviteUrl = escapeHtml(opts.inviteUrl);
-    const text = `Hello ${opts.name},\n\n${opts.inviterName} invited you to join ${opts.organizationName} on StatusForge as a ${opts.role}.\n\nAccept the invitation and set your password within 48 hours:\n${opts.inviteUrl}\n\nIf you weren't expecting this invitation, you can ignore this email.\n\nStatusForge`;
+    const text = `Hello ${opts.name},\n\n${opts.inviterName} has added you to the invitation list for ${opts.organizationName} on StatusForge as a ${opts.role}. Accept the invitation to activate your organization access and set your password within 48 hours:\n${opts.inviteUrl}\n\nIf you weren't expecting this invitation, you can ignore this email.\n\nStatusForge`;
     return this.sendEmail({
       to: opts.to,
       subject: `Invitation to join ${opts.organizationName} on StatusForge`,
       text,
-      html: `<p>Hello ${name},</p><p><strong>${inviter}</strong> invited you to join <strong>${organization}</strong> on StatusForge as a <strong>${role}</strong>.</p><p><a href="${inviteUrl}">Accept invitation and set your password</a></p><p>This invitation expires in 48 hours. If you weren't expecting it, you can ignore this email.</p><p>StatusForge</p>`,
+      html: `<p>Hello ${name},</p><p><strong>${inviter}</strong> has added you to the invitation list for <strong>${organization}</strong> on StatusForge as a <strong>${role}</strong>. Accept the invitation to activate your organization access.</p><p><a href="${inviteUrl}">Accept invitation and set your password</a></p><p>This invitation expires in 48 hours. If you weren't expecting it, you can ignore this email.</p><p>StatusForge</p>`,
+    });
+  }
+
+  async sendTeamAccessActivated(opts: {
+    to: string;
+    name: string;
+    organizationName: string;
+  }): Promise<boolean> {
+    const name = escapeHtml(opts.name);
+    const organization = escapeHtml(opts.organizationName);
+    const text = `Hello ${opts.name},\n\nYour StatusForge account has been added to ${opts.organizationName}. You can now sign in and access your organization's services, on-call schedules, and escalation policies.\n\nStatusForge`;
+    return this.sendEmail({
+      to: opts.to,
+      subject: `You now have access to ${opts.organizationName} on StatusForge`,
+      text,
+      html: `<p>Hello ${name},</p><p>Your StatusForge account has been added to <strong>${organization}</strong>. You can now sign in and access your organization's services, on-call schedules, and escalation policies.</p><p>StatusForge</p>`,
+    });
+  }
+
+  async sendOnCallAssignmentNotice(opts: {
+    to: string;
+    name: string;
+    scheduleName: string;
+    serviceName: string;
+    rotationType: 'daily' | 'weekly';
+    timezone: string;
+  }): Promise<boolean> {
+    const name = escapeHtml(opts.name);
+    const schedule = escapeHtml(opts.scheduleName);
+    const service = escapeHtml(opts.serviceName);
+    const rotation = escapeHtml(opts.rotationType);
+    const timezone = escapeHtml(opts.timezone);
+    const text = `Hello ${opts.name},\n\nYou have been added to the ${opts.rotationType} on-call rotation "${opts.scheduleName}" for ${opts.serviceName} in StatusForge.\n\nRotation timezone: ${opts.timezone}\n\nStatusForge`;
+    return this.sendEmail({
+      to: opts.to,
+      subject: `Added to ${opts.rotationType} on-call rotation: ${opts.scheduleName}`,
+      text,
+      html: `<p>Hello ${name},</p><p>You have been added to the <strong>${rotation}</strong> on-call rotation <strong>${schedule}</strong> for <strong>${service}</strong> in StatusForge.</p><p>Rotation timezone: ${timezone}</p><p>StatusForge</p>`,
+    });
+  }
+
+  async sendEscalationPolicyAssignmentNotice(opts: {
+    to: string;
+    name: string;
+    policyName: string;
+    serviceName: string;
+    steps: Array<{ order: number; timeoutMinutes: number }>;
+  }): Promise<boolean> {
+    const name = escapeHtml(opts.name);
+    const policy = escapeHtml(opts.policyName);
+    const service = escapeHtml(opts.serviceName);
+    const stepDetails = opts.steps
+      .map((step) => `Step ${step.order}: notify after ${step.timeoutMinutes} minutes`)
+      .join('\n');
+    const htmlSteps = opts.steps
+      .map((step) => `<li>Step ${step.order}: notify after ${step.timeoutMinutes} minutes</li>`)
+      .join('');
+    const text = `Hello ${opts.name},\n\nYou have been added to the escalation policy "${opts.policyName}" for ${opts.serviceName} in StatusForge.\n\n${stepDetails}\n\nStatusForge`;
+    return this.sendEmail({
+      to: opts.to,
+      subject: `Added to escalation policy: ${opts.policyName}`,
+      text,
+      html: `<p>Hello ${name},</p><p>You have been added to the escalation policy <strong>${policy}</strong> for <strong>${service}</strong> in StatusForge.</p><ul>${htmlSteps}</ul><p>StatusForge</p>`,
     });
   }
 
