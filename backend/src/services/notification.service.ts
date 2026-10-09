@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { randomBytes } from 'node:crypto';
 import { resolve4 } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import nodemailer, { Transporter } from 'nodemailer';
@@ -17,9 +18,18 @@ const escapeHtml = (value: string): string =>
 
 /**
  * NotificationService
- * Sends email via Nodemailer (SMTP/Gmail).
+ * Sends email through Gmail API, Resend, or SMTP.
  */
 class NotificationService {
+  private gmailApiConfig: {
+    clientId: string;
+    clientSecret: string;
+    refreshToken: string;
+    sender: string;
+  } | null = null;
+  private gmailAccessToken: string | null = null;
+  private gmailAccessTokenExpiresAt = 0;
+  private gmailTokenRequest: Promise<string> | null = null;
   private resendApiKey: string | null = null;
   private smtpConfig: {
     host: string;
@@ -33,14 +43,27 @@ class NotificationService {
     this.initMailer();
   }
 
-  // ─── Email (Nodemailer SMTP) ────────────────────────────────────────────────
+  // ─── Email provider configuration ───────────────────────────────────────────
 
   private initMailer(): void {
     const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS } = process.env;
+
+    const { GMAIL_API_CLIENT_ID, GMAIL_API_CLIENT_SECRET, GMAIL_API_REFRESH_TOKEN, GMAIL_API_SENDER } = process.env;
+    if (GMAIL_API_CLIENT_ID && GMAIL_API_CLIENT_SECRET && GMAIL_API_REFRESH_TOKEN && GMAIL_API_SENDER) {
+      this.gmailApiConfig = {
+        clientId: GMAIL_API_CLIENT_ID,
+        clientSecret: GMAIL_API_CLIENT_SECRET,
+        refreshToken: GMAIL_API_REFRESH_TOKEN,
+        sender: GMAIL_API_SENDER,
+      };
+      console.log('[NotificationService] Gmail API email delivery configured.');
+    } else if (GMAIL_API_CLIENT_ID || GMAIL_API_CLIENT_SECRET || GMAIL_API_REFRESH_TOKEN || GMAIL_API_SENDER) {
+      console.warn('[NotificationService] Gmail API settings are incomplete; all four GMAIL_API_* settings are required.');
+    }
+
     if (process.env.RESEND_API_KEY) {
       this.resendApiKey = process.env.RESEND_API_KEY;
-      console.log('[NotificationService] Resend email API configured.');
-      return;
+      if (!this.gmailApiConfig) console.log('[NotificationService] Resend email API configured.');
     }
 
     if (
@@ -57,10 +80,12 @@ class NotificationService {
         user: SMTP_USER,
         pass: SMTP_PASS,
       };
-      console.log('[NotificationService] Email (SMTP) transport initialized.');
-    } else {
+      if (!this.gmailApiConfig && !this.resendApiKey) {
+        console.log('[NotificationService] Email (SMTP) transport initialized.');
+      }
+    } else if (!this.gmailApiConfig && !this.resendApiKey) {
       console.warn(
-        '[NotificationService] Email not configured — set RESEND_API_KEY and EMAIL_FROM, or configure SMTP_HOST, SMTP_USER, and SMTP_PASS.'
+        '[NotificationService] Email not configured — set Gmail API credentials, RESEND_API_KEY and EMAIL_FROM, or SMTP settings.'
       );
     }
   }
@@ -71,6 +96,58 @@ class NotificationService {
     html: string;
     text: string;
   }): Promise<boolean> {
+    if (this.gmailApiConfig) {
+      try {
+        const accessToken = await this.getGmailAccessToken();
+        const boundary = `statusforge_${randomBytes(16).toString('hex')}`;
+        const encodedSubject = Buffer.from(opts.subject, 'utf8').toString('base64');
+        const rawMessage = [
+          `From: ${this.gmailApiConfig.sender}`,
+          `To: ${opts.to}`,
+          `Subject: =?UTF-8?B?${encodedSubject}?=`,
+          'MIME-Version: 1.0',
+          `Content-Type: multipart/alternative; boundary="${boundary}"`,
+          '',
+          `--${boundary}`,
+          'Content-Type: text/plain; charset="UTF-8"',
+          'Content-Transfer-Encoding: base64',
+          '',
+          this.encodeMimeBody(opts.text),
+          `--${boundary}`,
+          'Content-Type: text/html; charset="UTF-8"',
+          'Content-Transfer-Encoding: base64',
+          '',
+          this.encodeMimeBody(opts.html),
+          `--${boundary}--`,
+          '',
+        ].join('\r\n');
+
+        const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ raw: Buffer.from(rawMessage, 'utf8').toString('base64url') }),
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (!response.ok) {
+          const details = await response.json().catch(() => null) as { error?: { message?: string } } | null;
+          console.error(
+            `[NotificationService] Gmail API rejected email to ${opts.to} (HTTP ${response.status}): ${details?.error?.message || response.statusText}`
+          );
+          return false;
+        }
+
+        const result = await response.json().catch(() => null) as { id?: string } | null;
+        console.log(`[NotificationService] Email accepted by Gmail API → ${opts.to}${result?.id ? ` | ID: ${result.id}` : ''}`);
+        return true;
+      } catch (err) {
+        console.error(`[NotificationService] Gmail API request failed for ${opts.to}:`, err);
+        return false;
+      }
+    }
+
     if (this.resendApiKey) {
       const from = process.env.EMAIL_FROM;
       if (!from) {
@@ -155,6 +232,60 @@ class NotificationService {
       return false;
     } finally {
       mailer?.close();
+    }
+  }
+
+  private encodeMimeBody(value: string): string {
+    return Buffer.from(value, 'utf8')
+      .toString('base64')
+      .replace(/.{1,76}/g, '$&\r\n')
+      .trimEnd();
+  }
+
+  private async getGmailAccessToken(): Promise<string> {
+    if (!this.gmailApiConfig) {
+      throw new Error('Gmail API is not configured.');
+    }
+    if (this.gmailAccessToken && Date.now() < this.gmailAccessTokenExpiresAt - 60_000) {
+      return this.gmailAccessToken;
+    }
+    if (this.gmailTokenRequest) {
+      return this.gmailTokenRequest;
+    }
+
+    this.gmailTokenRequest = (async () => {
+      const response = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: this.gmailApiConfig!.clientId,
+          client_secret: this.gmailApiConfig!.clientSecret,
+          refresh_token: this.gmailApiConfig!.refreshToken,
+          grant_type: 'refresh_token',
+        }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      const result = await response.json().catch(() => null) as {
+        access_token?: string;
+        expires_in?: number;
+        error_description?: string;
+        error?: string;
+      } | null;
+      if (!response.ok || !result?.access_token) {
+        throw new Error(
+          `Google OAuth token refresh failed (HTTP ${response.status}): ${result?.error_description || result?.error || response.statusText}`
+        );
+      }
+
+      this.gmailAccessToken = result.access_token;
+      this.gmailAccessTokenExpiresAt = Date.now() + (result.expires_in ?? 3600) * 1000;
+      return result.access_token;
+    })();
+
+    try {
+      return await this.gmailTokenRequest;
+    } finally {
+      this.gmailTokenRequest = null;
     }
   }
 
